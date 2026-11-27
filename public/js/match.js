@@ -108,7 +108,7 @@ function freshRound(m) {
     p.cpuShots = 0;
     if ((p.inv[p.weapon] || 0) <= 0 && p.weapon !== "he") p.weapon = "he";
   }
-  placeGuns(m.terrain, m.players);
+  placeGuns(m.terrain, m.players, m.rng);
   // Observer mode: the FO's first call gives the gun a rough range to start from (rounded to 50 m, off by up to ~75 m).
   for (const p of m.players) {
     const foe = nearestEnemy(m, p);

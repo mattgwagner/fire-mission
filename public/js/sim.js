@@ -213,16 +213,30 @@ export function rangeCard() {
   return rangeCardCache;
 }
 
-export function placeGuns(terrain, players) {
-  const spots = players.length === 2 ? [0.16, 0.84] : players.length === 3 ? [0.14, 0.5, 0.86] : [0.12, 0.37, 0.63, 0.88];
+// Who stands where is shuffled every round, and each slot drifts a little, so the
+// same player never starts in the same spot by habit.
+export function placeGuns(terrain, players, rng = Math.random) {
+  const n = players.length;
+  const gap = WORLD_W / n;
+  const slots = [];
+  for (let i = 0; i < n; i++) {
+    const center = gap * (i + 0.5);
+    const jitter = (rng() * 2 - 1) * gap * 0.22;
+    slots.push(Math.round(Math.max(60, Math.min(WORLD_W - 60, center + jitter))));
+  }
+  const order = players.map((_, i) => i);
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
   const used = [];
   players.forEach((p, i) => {
-    const prefer = Math.round(spots[i] * WORLD_W);
+    const prefer = slots[order[i]];
     let best = prefer;
     let bestH = -1;
     for (let k = prefer - 50; k <= prefer + 50; k++) {
       if (k < 40 || k > WORLD_W - 40) continue;
-      if (used.some((u) => Math.abs(u - k) < 70)) continue;
+      if (used.some((u) => Math.abs(u - k) < 90)) continue;
       if (terrain[k] > bestH) {
         bestH = terrain[k];
         best = k;
@@ -231,15 +245,18 @@ export function placeGuns(terrain, players) {
     used.push(best);
     p.x = best;
     p.y = terrain[best];
-    p.facing = p.x < WORLD_W / 2 ? 1 : -1;
-    p.angle = p.facing > 0 ? 58 : 122;
     p.mils = 800;
     p.charge = 4;
     p.power = 62;
     p.lateral = 0;
-    const foe = spots[i] < 0.5 ? WORLD_W * 0.84 : WORLD_W * 0.16;
-    p.markX = Math.round(foe);
   });
+  for (const p of players) {
+    let foe = null;
+    for (const q of players) if (q !== p && (!foe || Math.abs(q.x - p.x) < Math.abs(foe.x - p.x))) foe = q;
+    p.facing = foe ? (foe.x > p.x ? 1 : -1) : p.x < WORLD_W / 2 ? 1 : -1;
+    p.angle = p.facing > 0 ? 58 : 122;
+    p.markX = foe ? Math.round(foe.x) : Math.round(WORLD_W / 2);
+  }
 }
 
 // Only guns whose ground was just changed can move. Settling every gun made a gun
