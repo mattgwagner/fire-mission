@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fire Mission</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%23c2410c'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="game.css">
+</head>
+<body>
+<p id="live" role="status" class="sr"></p>
+<section id="setup"></section>
+<section id="who" hidden></section>
+<section id="battle" hidden>
+  <header id="hud"></header>
+  <canvas id="field" aria-hidden="true"></canvas>
+  <div id="rangecard" hidden></div>
+  <div id="panel"></div>
+</section>
+<section id="shop" hidden></section>
+<section id="victory" hidden></section>
+<dialog id="lookaway" aria-labelledby="lookaway-title">
+  <h1 id="lookaway-title">Look away, shooter</h1>
+  <p>The observer gets the full hill. Hand over the keyboard.</p>
+  <form method="dialog">
+    <button value="ready" autofocus>I'm the observer</button>
+  </form>
+</dialog>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

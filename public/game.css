@@ -1,0 +1,276 @@
+:root {
+  color-scheme: dark;
+  --ink: #241c14;
+  --paper: #f4e7cf;
+  --paper-2: #efe0c0;
+  --fire: #c2410c;
+  --fire-ink: #fff7ed;
+  --line: #d9c7a4;
+  --focus: #9a3412;
+  font-family: Palatino, "Iowan Old Style", Palatino Linotype, Georgia, serif;
+  /* Scales with the screen so the couch can read it on a big TV. */
+  font-size: clamp(16px, 1.05vw, 22px);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  height: 100dvh;
+  overflow: hidden;
+  background: #1c1915;
+  color: var(--paper);
+}
+
+button, input { font: inherit; color: inherit; }
+
+button {
+  min-height: 2.6rem;
+  min-width: 2.6rem;
+  padding: 0.3rem 0.75rem;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+button[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--paper);
+  box-shadow: inset 0 0 0 2px #e8a87c;
+}
+
+button:focus-visible, input:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+button:disabled { opacity: 0.45; cursor: default; }
+
+#fire, #start, #who-done, #to-shop, #shop-done, #again, #next {
+  background: var(--fire);
+  color: var(--fire-ink);
+  font-weight: 700;
+  min-width: 6.5rem;
+}
+
+/* Off the battle panel the page is dark, so a pressed button fills with fire color instead of going dark. */
+#setup button[aria-pressed="true"], #who button[aria-pressed="true"]:not(.swatch) {
+  background: var(--fire);
+  color: var(--fire-ink);
+  box-shadow: inset 0 0 0 2px #ffd2b0;
+  font-weight: 700;
+}
+#setup .label { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.6; margin: 0.6rem 0 0; }
+#setup .blurb { font-size: 1rem; opacity: 0.8; margin: 0 0 0.2rem; min-height: 1.4em; }
+#start { font-size: 1.4rem; padding: 0 2.6rem; min-height: 3.4rem; margin-top: 0.8rem; border-radius: 14px; }
+#who-done { font-size: 1.3rem; padding: 0 2.2rem; min-height: 3.2rem; margin-top: 0.6rem; border-radius: 14px; }
+
+button.swatch[aria-pressed="true"] {
+  outline: 3px solid var(--paper);
+  outline-offset: 2px;
+}
+
+section[hidden] { display: none !important; }
+
+#setup, #who, #shop, #victory {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0.5rem 0.8rem 0.8rem;
+  height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: safe center;
+  align-items: center;
+}
+
+h1 { font-size: 2.6rem; margin: 0.2rem 0 0.4rem; letter-spacing: 0.01em; }
+#setup > p { font-size: 1.15rem; opacity: 0.85; margin-bottom: 0.8rem; }
+h2 { font-size: 1.2rem; margin: 0.2rem 0 0.4rem; }
+p { margin: 0.25rem 0; }
+
+.row, .slots { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; justify-content: center; margin: 0.4rem 0; }
+.slots { flex-direction: column; align-items: stretch; }
+.slot { background: #2b2620; border-radius: 14px; padding: 0.45rem 0.7rem; }
+.slot .group-label { font-size: 1rem; font-weight: 700; min-width: 3.6rem; }
+.cluster { display: inline-flex; flex-wrap: nowrap; gap: 0.35rem; align-items: center; }
+.slot { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+legend, .group-label { font-size: 0.85rem; margin-right: 0.25rem; }
+
+#battle {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#battle { position: relative; }
+
+#hud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  align-items: center;
+  padding: 0.35rem 0.8rem;
+  background: #29241e;
+}
+
+#scores { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.score {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  background: #362f27;
+  border: 2px solid transparent;
+}
+.score.up { border-color: var(--c); background: #423a30; }
+.score.out { opacity: 0.5; }
+.score .nm { font-weight: 700; }
+.score .hp { width: 4.5rem; height: 0.55rem; border-radius: 999px; background: #1c1915; overflow: hidden; display: inline-block; }
+.score .hp b { display: block; height: 100%; background: var(--c); }
+.score .hpn { font-variant-numeric: tabular-nums; min-width: 1.8rem; }
+.score .wins { color: #ffd27a; letter-spacing: 0.05em; }
+.dot { width: 0.8rem; height: 0.8rem; border-radius: 50%; display: inline-block; }
+#turn-line { margin-left: auto; opacity: 0.9; }
+
+#field { flex: 1 1 auto; width: 100%; min-height: 0; display: block; background: #87b8d8; }
+
+#panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.7rem;
+  align-items: center;
+  /* A steady height keeps the battlefield from jumping between aim and result. */
+  min-height: 6.6rem;
+  padding: 0.5rem 0.9rem;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.grp, .who-chip, .fo-call {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.45rem;
+  border-radius: 14px;
+  background: var(--paper-2);
+}
+.grp .cap, .who-chip .cap, .fo-call .cap {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.7;
+  margin: 0 0.25rem 0 0.15rem;
+}
+.who-chip { border-left: 0.5rem solid var(--c); font-size: 1.25rem; padding-right: 0.8rem; }
+.fo-call { background: #1f2a1a; color: #e9f5d6; font-size: 1.2rem; padding-right: 0.8rem; }
+.fo-call b { letter-spacing: 0.04em; }
+.grp button { background: #fffaf0; }
+#assist, #card-toggle { background: var(--paper-2); border: 2px solid var(--line); }
+#assist[aria-pressed="true"], #card-toggle[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.grp button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.grp .hint { font-size: 0.85rem; opacity: 0.6; padding: 0 0.3rem; }
+.keys { flex: 1 0 100%; font-size: 0.78rem; opacity: 0.6; margin: 0; }
+
+#panel .readout { font-weight: 800; font-size: 1.35rem; min-width: 4.6rem; text-align: center; font-variant-numeric: tabular-nums; }
+
+#fire { margin-left: auto; font-size: 1.45rem; min-height: 3.4rem; padding: 0 2.2rem; border-radius: 14px; }
+#next { margin-left: auto; font-size: 1.3rem; min-height: 3.2rem; padding: 0 1.8rem; border-radius: 14px; }
+
+.result { border-left: 0.5rem solid var(--c, var(--fire)); padding-left: 0.8rem; }
+.result-big { font-size: 1.7rem; font-weight: 800; margin: 0; }
+.result #log { font-size: 0.9rem; opacity: 0.7; text-align: left; }
+
+.callout { font-size: 1.35rem; font-weight: 700; letter-spacing: 0.02em; margin: 0.1rem 0; }
+.callout b { font-size: 1.6rem; color: #9a3412; }
+
+#rangecard {
+  position: absolute;
+  right: 0.8rem;
+  top: 4.2rem;
+  background: rgba(255, 250, 240, 0.95);
+  color: var(--ink);
+  border-radius: 12px;
+  padding: 0.4rem 0.6rem;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+}
+#rangecard table { font-size: 0.85rem; }
+
+input[type="range"] {
+  accent-color: #c2410c;
+  min-height: 2.6rem;
+  width: 14rem;
+  margin: 0;
+}
+
+input[type="text"] {
+  min-height: 44px;
+  border-radius: 10px;
+  border: 2px solid var(--line);
+  background: #fffaf0;
+  color: var(--ink);
+  padding: 0 0.5rem;
+}
+
+.swatch { min-width: 3rem; min-height: 3rem; padding: 0; }
+#who .card { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; background: #2b2620; padding: 0.7rem 1rem; border-radius: 16px; }
+#who input[type="text"] { font-size: 1.3rem; text-align: center; width: 16rem; }
+.card { margin: 0.25rem 0 0.5rem; }
+
+#panel > #log { flex: 1 0 100%; text-align: center; }
+table { border-collapse: collapse; font-size: 0.75rem; background: #fffaf0; }
+th, td { border: 1px solid var(--line); padding: 0.1rem 0.3rem; text-align: right; }
+caption { text-align: left; font-size: 0.75rem; }
+
+.shop-item { display: flex; gap: 0.7rem; align-items: center; margin: 0.25rem 0; width: min(36rem, 100%); }
+.shop-item button { min-width: 13rem; text-align: left; }
+.shop-item span { font-size: 0.95rem; opacity: 0.85; }
+
+dialog:modal {
+  overscroll-behavior: contain;
+  border: none;
+  background: var(--paper);
+  color: var(--ink);
+  border-radius: 16px;
+  padding: 1.25rem 1.4rem;
+  max-width: min(28rem, 92vw);
+}
+
+dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background: rgba(20, 16, 12, 0.72);
+}
+
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-height: 820px) {
+  h1 { font-size: 1.35rem; }
+  #setup, #who, #shop, #victory { padding-top: 0.3rem; }
+  .card { margin: 0.1rem 0 0.3rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { scroll-behavior: auto; }
+}
+
+/* Gunner and observer controls take two rows; hold that height through the result screen too. */
+#battle[data-mode="gunner"] #panel, #battle[data-mode="observer"] #panel { min-height: 11.5rem; }
+#to-shop { margin-left: auto; font-size: 1.3rem; min-height: 3.2rem; padding: 0 2rem; border-radius: 14px; }
+@media (max-width: 1600px) {
+  #battle[data-mode="arcade"] #panel { min-height: 9.7rem; }
+}
