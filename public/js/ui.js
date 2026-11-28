@@ -9,17 +9,22 @@ import {
   enterShop,
   fire,
   handoff,
+  inSmoke,
   nearestEnemy,
+  popSmoke,
   shopDone,
   shotFrom,
+  useRepair,
   winnerPlayer,
 } from "./match.js";
+import { glyph, scene } from "./art.js";
 import {
   AMMO,
   CPU_NAMES,
   GEAR,
   MAPS,
   PALETTE,
+  QUICK,
   VIEW_H,
   WORLD_W,
   fly,
@@ -42,7 +47,7 @@ let mapId = "hills";
 let bestOf = 3;
 let humanFO = false;
 let match = null;
-let shell = null;
+let flightAt = null;
 let effects = [];
 let animating = false;
 let showCard = true;
@@ -374,6 +379,7 @@ function onTurn() {
       setTimeout(() => {
         if (match !== m || m.phase !== "aim" || currentPlayer(m) !== p) return;
         chooseShot(m);
+        drainFx();
         draw();
         setTimeout(() => {
           if (match === m && m.phase === "aim" && currentPlayer(m) === p) shoot();
@@ -401,17 +407,19 @@ function shoot() {
   }
   shotSound();
   const path = match.lastFlight || [];
-  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  if (!path.length || reduce) {
-    shell = path.length ? path[path.length - 1] : null;
+  if (!path.length || reduceMotion()) {
+    flightAt = null;
     finishFlight();
     return;
   }
+  // Every round plays at one pace, so a Roller visibly rolls and Cluster bomblets fall after the split.
+  const subLen = Math.max(0, ...(match.lastSubs || []).map((sp) => sp.length));
+  const total = path.length + subLen;
+  const dur = Math.min(2800, Math.max(1100, total * 24));
   const start = performance.now();
-  const dur = 1400;
   const step = (now) => {
     const t = Math.min(1, (now - start) / dur);
-    shell = path[Math.min(path.length - 1, Math.floor(t * (path.length - 1)))];
+    flightAt = t * (total - 1);
     draw();
     if (t < 1) requestAnimationFrame(step);
     else finishFlight();
@@ -421,7 +429,7 @@ function shoot() {
 
 function finishFlight() {
   commitFlight(match);
-  shell = null;
+  flightAt = null;
   showImpact = !!(match.lastImpact && !match.lastImpact.off);
   if (match.pendingCallout !== "LOST" && !match.lastImpact?.off) boom();
   impactEffects();
@@ -610,19 +618,39 @@ function renderPanel() {
   who.style.setProperty("--c", p.color);
   who.append(h("span", { class: "cap", text: "Up" }), h("b", { text: p.name }));
   panel.append(who);
+  if (match.skipNote) panel.append(h("p", { class: "skip-note", text: match.skipNote }));
 
   const owned = AMMO.filter((item) => item.id === "he" || (p.inv[item.id] || 0) > 0);
   if (!owned.some((item) => item.id === p.weapon)) p.weapon = "he";
   const weapons = group("Round", { role: "group", "aria-label": "Weapon" });
   for (const item of owned) {
-    const count = item.id === "he" ? "" : ` ×${p.inv[item.id]}`;
-    weapons.append(button(`${item.name}${count}`, { "data-weapon": item.id, title: item.hint, "aria-pressed": pressed(p.weapon === item.id) }, () => {
+    const node = iconButton(item.id, item.name, item.id === "he" ? "" : `×${p.inv[item.id]}`, { "data-weapon": item.id, title: item.hint, "aria-pressed": pressed(p.weapon === item.id) }, () => {
       p.weapon = item.id;
       renderPanel();
       draw();
-    }));
+    });
+    weapons.append(node);
   }
   panel.append(weapons);
+
+  const quick = QUICK.filter((item) => (p.inv[item.id] || 0) > 0);
+  if (quick.length) {
+    const box = group("Quick", { role: "group", "aria-label": "Quick items, don't end your turn" });
+    for (const item of quick) {
+      const node = iconButton(item.id, item.id === "repair" ? "Repair" : "Pop smoke", `×${p.inv[item.id]}`, { "data-quick": item.id, title: item.hint }, () => {
+        const res = item.id === "repair" ? useRepair(match) : popSmoke(match);
+        if (!res.ok) say(res.reason);
+        drainFx();
+        renderHud();
+        renderPanel();
+        draw();
+      });
+      if (item.id === "repair" && (p.repaired || p.hp >= 100)) node.disabled = true;
+      if (item.id === "smoke" && match.smokes.some((sm) => sm.by === p.id)) node.disabled = true;
+      box.append(node);
+    }
+    panel.append(box);
+  }
 
   if (match.mode === "arcade") {
     const aim = group("Angle");
@@ -721,8 +749,20 @@ function renderPanel() {
   }
 
   panel.append(button("Fire", { id: "fire" }, () => shoot()));
-  panel.append(h("p", { class: "keys", text: match.mode === "arcade" ? "Keys: ← → aim · ↑ ↓ power · Space fires" : "Keys: ← → mils · ↑ ↓ charge · Space fires" }));
+  const chosen = AMMO.find((a) => a.id === p.weapon);
+  const keys = match.mode === "arcade" ? "Keys: ← → aim · ↑ ↓ power · Space fires" : "Keys: ← → mils · ↑ ↓ charge · Space fires";
+  const tip = p.spotted ? "Flare up: your whole arc is showing. " : chosen && chosen.id !== "he" ? `${chosen.name}: ${chosen.hint} ` : "";
+  panel.append(h("p", { class: "keys", text: `${tip}${keys}` }));
   renderCard();
+}
+
+function iconButton(id, label, count, attrs, onClick) {
+  const node = h("button", { type: "button", class: "icon-btn", ...attrs });
+  node.innerHTML = glyph(id);
+  node.append(h("span", { text: label }));
+  if (count) node.append(h("span", { class: "count", text: count }));
+  node.addEventListener("click", onClick);
+  return node;
 }
 
 function group(label, attrs = {}) {
@@ -742,11 +782,11 @@ function renderCard() {
 function resultLine(m) {
   const hits = m.lastHits || [];
   if (m.lastImpact?.off) return "Off the map";
+  const buried = (m.lastBuried || []).map((id) => m.players.find((g) => g.id === id)?.name).filter(Boolean);
+  if (buried.length) return `Buried! ${buried.join(" and ")} ${buried.length > 1 ? "lose" : "loses"} a turn`;
   if (!hits.length) {
-    if (m.lastWeapon === "smoke") return "Smoke down";
-    if (m.lastWeapon === "illum") return "The hill lights up";
+    if (m.lastWeapon === "illum") return m.map === "night" ? "The hill lights up" : "Flare up: your next arc shows in full";
     if (m.lastWeapon === "dirt") return "Dirt piled up";
-    if (m.lastWeapon === "digger") return "The ground drops";
     return m.mode === "observer" ? "Splash" : "Miss";
   }
   const shooterId = m.players[m.shooterIndex ?? m.turnIndex]?.id;
@@ -813,31 +853,67 @@ function renderBattle() {
   if (match.phase === "callout" && !match.lookedAway && !dialog.open) dialog.showModal();
 }
 
-function renderShop() {
+const KIND = { round: "Round", quick: "Quick use", gear: "Gear" };
+
+function shopCard(p, item, kind) {
+  const card = h("article", { class: "shop-card", "data-kind": kind });
+  card.innerHTML = scene(item.id);
+  const head = h("header");
+  head.append(h("h3", { text: item.name }), h("span", { class: "price", text: `$${item.price}` }));
+  card.append(head, h("p", { text: item.hint }));
+  const foot = h("footer");
+  let have = "";
+  if (item.id === "armor") have = p.armor ? "Fitted" : "";
+  else if (item.id === "shovel") have = p.shovelNext ? "Packed" : "";
+  else if (p.inv[item.id]) have = `You have ${p.inv[item.id]}`;
+  foot.append(h("span", { class: "kind", text: KIND[kind] }), h("span", { class: "have", text: have }));
+  const node = button("Buy", { "data-buy": item.id, "aria-label": `Buy ${item.name}, $${item.price}` }, () => {
+    const res = buy(match, item.id);
+    if (!res.ok) {
+      say(res.reason);
+      return;
+    }
+    say(`Bought ${item.name}. $${match.players[match.shopIndex].cash} left.`);
+    renderShop(item.id);
+  });
+  const owned = (item.id === "armor" && p.armor) || (item.id === "shovel" && p.shovelNext);
+  if (p.cash < item.price || owned) node.disabled = true;
+  if (owned) node.textContent = "Owned";
+  foot.append(node);
+  card.append(foot);
+  return card;
+}
+
+function renderShop(justBought) {
   const root = document.querySelector("#shop");
   const p = match.players[match.shopIndex];
   root.replaceChildren();
-  root.append(h("h1", { text: `${p.name}'s shop` }));
-  const pay = p.caughtUp ? `Earned $${p.lastPay}, including last place.` : `Earned $${p.lastPay}.`;
-  root.append(h("p", { text: `${pay} Cash $${p.cash}. HE is always free.` }));
-  for (const item of [...AMMO.filter((a) => a.price > 0), ...GEAR]) {
-    const row = h("div", { class: "shop-item" });
-    const owned = item.id === "armor" ? (p.armor ? "owned" : "") : item.id === "shovel" ? (p.shovelNext ? "packed" : "") : `have ${p.inv[item.id] || 0}`;
-    const node = button(`${item.name} · $${item.price}`, { "data-buy": item.id }, () => {
-      const res = buy(match, item.id);
-      if (!res.ok) say(res.reason);
-      renderShop();
-    });
-    if (p.cash < item.price || (item.id === "armor" && p.armor) || (item.id === "shovel" && p.shovelNext)) node.disabled = true;
-    row.append(node, h("span", { text: `${item.hint}${owned ? ` · ${owned}` : ""}` }));
-    root.append(row);
-  }
-  root.append(button("Done", { id: "shop-done" }, () => {
+  const top = h("div", { class: "shop-top" });
+  const title = h("h1");
+  title.append(document.createTextNode(`${p.name}'s shop`));
+  top.append(title);
+  const pay = p.caughtUp ? `Earned $${p.lastPay}, including the last-place bonus.` : `Earned $${p.lastPay} last round.`;
+  top.append(h("p", { class: "shop-pay", text: `${pay} HE is always free.` }));
+  const cash = h("p", { class: "cash", id: "cash" });
+  cash.append(h("span", { class: "cap", text: "Cash" }), h("b", { text: `$${p.cash}` }));
+  top.append(cash);
+  top.append(button("Done", { id: "shop-done" }, () => {
     shopDone(match);
     shopStep();
   }));
+  root.append(top);
+  const grid = h("div", { class: "shop-grid" });
+  for (const item of AMMO.filter((a) => a.price > 0)) grid.append(shopCard(p, item, "round"));
+  for (const item of QUICK) grid.append(shopCard(p, item, "quick"));
+  for (const item of GEAR) grid.append(shopCard(p, item, "gear"));
+  root.append(grid);
   show("shop");
-  say(`${p.name}'s shop. $${p.cash}.`);
+  if (justBought) {
+    const card = root.querySelector(`[data-buy="${justBought}"]`)?.closest(".shop-card");
+    card?.classList.add("bought");
+    const again = root.querySelector(`[data-buy="${justBought}"]`);
+    (again && !again.disabled ? again : root.querySelector("#shop-done"))?.focus();
+  } else say(`${p.name}'s shop. $${p.cash}.`);
 }
 
 function showVictory() {
@@ -941,18 +1017,17 @@ function draw() {
   ctx.stroke();
 
   const who = viewer();
+  const smokeAfter = [];
   for (const smoke of match.smokes) {
-    const [sx, sy] = world(smoke.x, (match.terrain[Math.round(smoke.x)] || 0) + 30);
-    ctx.fillStyle = "rgba(90, 90, 90, 0.55)";
-    ctx.beginPath();
-    ctx.ellipse(sx, sy, (smoke.r / WORLD_W) * w, (smoke.r / VIEW_H) * hgt * 0.5, 0, 0, Math.PI * 2);
-    ctx.fill();
+    // Your own smoke is see-through to you; everyone else gets a solid cloud, drawn over the guns.
+    if (who && smoke.by === who.id) drawSmoke(smoke, w, hgt, 0.35);
+    else smokeAfter.push(smoke);
   }
 
   // Each gun's last shot stays up as a dotted arc until it fires again, so it can walk the next one in.
   for (const g of match.players) {
     if (!g.trail || !g.trail.length || g.hp <= 0) continue;
-    if (shell && g === currentPlayer(match)) continue;
+    if (flightAt != null && g === currentPlayer(match)) continue;
     const mine = who && g === who;
     ctx.save();
     ctx.globalAlpha = mine ? 0.75 : 0.35;
@@ -963,6 +1038,7 @@ function draw() {
     let started = false;
     for (const pt of g.trail) {
       if (who && hiddenX(who, pt.x)) break;
+      if (who && g !== who && inSmoke(match, who.id, pt.x) && pt.y < (match.terrain[Math.round(pt.x)] || 0) + 60) break;
       const [sx, sy] = world(pt.x, pt.y);
       if (!started) {
         ctx.moveTo(sx, sy);
@@ -978,11 +1054,15 @@ function draw() {
     if (who && smokedOut(who, g.x) && g !== who) continue;
     drawGun(g, who, w, night);
   }
+  for (const smoke of smokeAfter) drawSmoke(smoke, w, hgt, 0.92);
 
-  if (who && match.mode === "arcade" && who.assist && match.phase === "aim") {
+  if (who && who.human && match.phase === "aim" && who.weapon === "guided") drawMark(who, w);
+
+  // A flare shows the whole arc for the next shot; Assist shows the first fifth.
+  if (who && match.phase === "aim" && (who.spotted || (match.mode === "arcade" && who.assist))) {
     const shot = shotFrom(match, who, { trace: true });
     const preview = fly(match.terrain, match.players, shot, who.blindWind ? 0 : match.wind);
-    const n = Math.max(2, Math.ceil(preview.path.length * 0.2));
+    const n = who.spotted ? preview.path.length : Math.max(2, Math.ceil(preview.path.length * 0.2));
     ctx.fillStyle = who.color;
     for (const pt of preview.path.slice(0, n)) {
       if (hiddenX(who, pt.x)) break;
@@ -994,32 +1074,17 @@ function draw() {
   }
 
   const path = match.lastFlight || [];
-  if (shell && path.length) {
+  if (flightAt != null && path.length) {
     const shooter = currentPlayer(match);
-    ctx.strokeStyle = shooter ? shooter.color : "#241c14";
-    ctx.lineWidth = Math.max(2.5, w / 640);
-    ctx.beginPath();
-    let started = false;
-    for (const pt of path) {
-      if (pt === shell) break;
-      if (who && hiddenX(who, pt.x)) break;
-      const [sx, sy] = world(pt.x, pt.y);
-      if (!started) {
-        ctx.moveTo(sx, sy);
-        started = true;
-      } else ctx.lineTo(sx, sy);
-    }
-    ctx.stroke();
-    if (!who || !hiddenX(who, shell.x)) {
-      const [sx, sy] = world(shell.x, shell.y);
-      ctx.fillStyle = "#1b1510";
-      ctx.beginPath();
-      ctx.arc(sx, sy, Math.max(5, w / 320), 0, Math.PI * 2);
-      ctx.fill();
+    const color = shooter ? shooter.color : "#241c14";
+    drawTracer(path, Math.min(flightAt, path.length - 1), color, who, w, 1);
+    if (flightAt > path.length - 1) {
+      for (const sub of match.lastSubs || []) drawTracer(sub, Math.min(flightAt - path.length, sub.length - 1), color, who, w, 0.6);
     }
   }
 
-  if (showImpact && match.lastImpact && !match.lastImpact.off && !effects.some((e) => e.kind === "boom")) {
+  const ringHidden = who && match.lastImpact && inSmoke(match, who.id, match.lastImpact.x) && match.players[match.shooterIndex ?? -1] !== who;
+  if (showImpact && match.lastImpact && !match.lastImpact.off && !ringHidden && !effects.some((e) => e.kind === "boom")) {
     const [ix, iy] = world(match.lastImpact.x, match.lastImpact.y);
     if (!who || !hiddenX(who, match.lastImpact.x)) {
       const ring = Math.max(14, w / 90);
@@ -1052,6 +1117,96 @@ function draw() {
 
   drawWind(w, hgt, who);
   ctx.restore();
+}
+
+function drawSmoke(smoke, w, hgt, alpha) {
+  const base = (match.terrain[Math.round(smoke.x)] || 0) + 8;
+  const rx = (smoke.r / WORLD_W) * w;
+  const t = performance.now() / 1000;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  for (const [dx, dy, k] of [[-0.55, 10, 0.5], [0.5, 12, 0.5], [0, 26, 0.62], [-0.3, 40, 0.45], [0.32, 38, 0.42], [0, 6, 0.55]]) {
+    const [sx, sy] = world(smoke.x + dx * smoke.r * 0.8, base + dy);
+    ctx.fillStyle = k > 0.5 ? "#9a9a96" : "#86867f";
+    ctx.beginPath();
+    ctx.arc(sx + Math.sin(t * 0.6 + dx * 5) * rx * 0.03, sy, rx * k, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawTracer(path, at, color, who, w, size) {
+  const end = Math.floor(at);
+  if (end < 0) return;
+  ctx.save();
+  ctx.lineWidth = Math.max(2, (w / 640) * size);
+  ctx.strokeStyle = color;
+  ctx.beginPath();
+  let started = false;
+  let under = false;
+  for (let i = 0; i <= end; i++) {
+    const pt = path[i];
+    if (who && hiddenX(who, pt.x)) break;
+    if (pt.under && !under) {
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.strokeStyle = "rgba(48, 34, 18, 0.9)";
+      ctx.setLineDash([Math.max(4, w / 300), Math.max(4, w / 300)]);
+      started = false;
+      under = true;
+    }
+    const [sx, sy] = world(pt.x, pt.y);
+    if (!started) {
+      ctx.moveTo(sx, sy);
+      started = true;
+    } else ctx.lineTo(sx, sy);
+  }
+  ctx.stroke();
+  ctx.restore();
+  const head = path[end];
+  if (!head || (who && hiddenX(who, head.x))) return;
+  const [sx, sy] = world(head.x, head.y);
+  ctx.save();
+  ctx.fillStyle = head.under ? "rgba(27, 21, 16, 0.55)" : "#1b1510";
+  ctx.beginPath();
+  ctx.arc(sx, sy, Math.max(3, (w / 320) * size), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawMark(p, w) {
+  const x = p.markX;
+  const [sx, sy] = world(x, (match.terrain[Math.round(x)] || 0) + 14);
+  const r = Math.max(10, w / 110);
+  ctx.save();
+  ctx.strokeStyle = p.color;
+  ctx.lineWidth = Math.max(2.5, w / 600);
+  ctx.beginPath();
+  ctx.arc(sx, sy, r, 0, Math.PI * 2);
+  ctx.moveTo(sx, sy - r * 1.7);
+  ctx.lineTo(sx, sy - r * 0.5);
+  ctx.moveTo(sx, sy + r * 0.5);
+  ctx.lineTo(sx, sy + r * 1.7);
+  ctx.moveTo(sx - r * 1.7, sy);
+  ctx.lineTo(sx - r * 0.5, sy);
+  ctx.moveTo(sx + r * 0.5, sy);
+  ctx.lineTo(sx + r * 1.7, sy);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Quick items (repair, smoke) leave notes in match.fx; show them and clear the queue.
+function drainFx() {
+  if (!match || !match.fx) return;
+  for (const f of match.fx.splice(0)) {
+    if (f.kind === "heal") {
+      addEffect({ kind: "num", x: f.x, y: f.y + 42, text: `+${f.amount}`, color: "#7ee08f", big: true, dur: 1600 });
+      say(`${match.players.find((g) => g.id === f.id)?.name} patches up +${f.amount}`);
+    } else if (f.kind === "smoke") {
+      addEffect({ kind: "puff", x: f.x, y: f.y + 20, r: 70, color: "#9a9a96", dur: 1100 });
+      say(`${match.players.find((g) => g.id === f.id)?.name} pops smoke`);
+    }
+  }
 }
 
 function drawGun(g, who, w, night) {
@@ -1090,6 +1245,18 @@ function drawGun(g, who, w, night) {
     ctx.moveTo(bx, by);
     ctx.lineTo(bx + Math.cos(ang) * 2.3 * u, by - Math.sin(ang) * 2.3 * u);
     ctx.stroke();
+    if (g.buried) {
+      ctx.fillStyle = "#8a6a3f";
+      ctx.strokeStyle = "#5c4422";
+      ctx.lineWidth = Math.max(2, u * 0.2);
+      ctx.beginPath();
+      ctx.moveTo(sx - 2.6 * u, sy);
+      ctx.quadraticCurveTo(sx - 1.6 * u, sy - 3.4 * u, sx, sy - 3.3 * u);
+      ctx.quadraticCurveTo(sx + 1.6 * u, sy - 3.4 * u, sx + 2.6 * u, sy);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
   } else {
     ctx.fillStyle = "rgba(60, 56, 52, 0.55)";
     ctx.beginPath();
@@ -1257,34 +1424,38 @@ function tick(now) {
   }
 }
 
-const BOOM_R = { he: 36, big: 54, cluster: 16, guided: 36 };
-
 function impactEffects() {
   const imp = match.lastImpact;
-  if (!imp || imp.off) return;
   const weapon = match.lastWeapon || "he";
   const slow = reduceMotion();
-  if (weapon === "smoke") addEffect({ kind: "puff", x: imp.x, y: imp.y + 10, r: 60, color: "#8a8a8a", dur: 1200 });
-  else if (weapon === "dirt") addEffect({ kind: "puff", x: imp.x, y: imp.y, r: 34, color: "#8a6a3f", dur: 900 });
-  else if (weapon === "illum") addEffect({ kind: "puff", x: imp.x, y: imp.y + 120, r: 50, color: "#fff4b0", dur: 1400 });
-  else {
-    const spots = weapon === "cluster" ? [-36, -18, 0, 18, 36] : [0];
-    for (const dx of spots) {
-      addEffect({ kind: "boom", x: imp.x + dx, y: imp.y, r: BOOM_R[weapon] || 36, dur: slow ? 300 : 650 });
-      if (!slow) {
-        for (let k = 0; k < 10; k++) {
-          addEffect({
-            kind: "bit",
-            x: imp.x + dx,
-            y: imp.y,
-            vx: (Math.random() * 2 - 1) * 60,
-            vy: 40 + Math.random() * 90,
-            color: Math.random() < 0.5 ? "#6b5130" : "#3d5a28",
-            dur: 900,
-          });
-        }
-      }
+  if (imp && !imp.off) {
+    if (weapon === "dirt") {
+      addEffect({ kind: "puff", x: imp.x, y: imp.y, r: 46, color: "#8a6a3f", dur: 1000 });
+      if (!slow) for (let k = 0; k < 16; k++) addEffect({ kind: "bit", x: imp.x, y: imp.y + 20, vx: (Math.random() * 2 - 1) * 50, vy: 30 + Math.random() * 80, color: "#6b5130", dur: 1000 });
+    } else if (weapon === "illum") {
+      addEffect({ kind: "puff", x: imp.x, y: imp.y + 160, r: 60, color: "#fff4b0", dur: 1600 });
     }
+  }
+  for (const b of match.lastBursts || []) {
+    addEffect({ kind: "boom", x: b.x, y: b.y, r: b.r * 0.85, dur: slow ? 300 : 650 });
+    if (slow) continue;
+    const bits = b.r > 50 ? 18 : b.r < 32 ? 5 : 10;
+    for (let k = 0; k < bits; k++) {
+      addEffect({
+        kind: "bit",
+        x: b.x,
+        y: b.y,
+        vx: (Math.random() * 2 - 1) * 60,
+        vy: 40 + Math.random() * 90,
+        color: Math.random() < 0.5 ? "#6b5130" : "#3d5a28",
+        dur: 900,
+      });
+    }
+  }
+  if (weapon === "big" && (match.lastBursts || []).length) addEffect({ kind: "shake", x: 0, y: 0, mag: 10, dur: 420 });
+  for (const id of match.lastBuried || []) {
+    const g = match.players.find((p) => p.id === id);
+    if (g) addEffect({ kind: "num", x: g.x, y: g.y + 58, text: "Buried!", color: "#e8c48a", big: true, dur: 2000 });
   }
   for (const hit of match.lastHits || []) {
     const g = match.players.find((p) => p.id === hit.id);
@@ -1317,7 +1488,7 @@ function hiddenX(who, x) {
 }
 
 function smokedOut(who, x) {
-  return match.smokes.some((s) => s.by !== who.id && Math.abs(s.x - x) < s.r * 0.6);
+  return inSmoke(match, who.id, x);
 }
 
 function onKey(e) {

@@ -274,3 +274,88 @@ dialog::backdrop {
 @media (max-width: 1600px) {
   #battle[data-mode="arcade"] #panel { min-height: 9.7rem; }
 }
+
+/* Round and quick-item buttons carry a small icon. */
+.icon-btn { display: inline-flex; align-items: center; gap: 0.35rem; }
+.icon-btn .glyph { width: 1.35rem; height: 1.35rem; flex: none; }
+.icon-btn .count { font-size: 0.8rem; opacity: 0.75; font-variant-numeric: tabular-nums; }
+.skip-note { font-weight: 700; color: #7a4a12; background: #f3d9a8; border-radius: 10px; padding: 0.25rem 0.6rem; }
+
+/* Shop: a grid of picture cards. Done sits at the top so it never falls off a short screen. */
+#shop { max-width: 84rem; justify-content: flex-start; overflow-y: auto; gap: 0.5rem; }
+.shop-top { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1.2rem; width: 100%; }
+.shop-top h1 { margin: 0; }
+.shop-pay { opacity: 0.8; margin: 0; }
+.cash { margin: 0 0 0 auto; display: inline-flex; align-items: baseline; gap: 0.4rem; background: #2b2620; border-radius: 999px; padding: 0.2rem 0.9rem; }
+.cash .cap { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.7; }
+.cash b { font-size: 1.6rem; color: #ffd27a; font-variant-numeric: tabular-nums; }
+#shop-done { font-size: 1.2rem; min-height: 3rem; padding: 0 2rem; border-radius: 14px; }
+
+.shop-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+  gap: 0.6rem;
+  width: 100%;
+}
+
+.shop-card {
+  display: grid;
+  grid-template-columns: 36% 1fr;
+  grid-template-rows: auto 1fr auto;
+  gap: 0.2rem 0.7rem;
+  margin: 0;
+  padding: 0.5rem;
+  border-radius: 14px;
+  background: #2b2620;
+  border: 2px solid transparent;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+.shop-card:hover, .shop-card:focus-within { border-color: #e8a87c; background: #352e26; }
+.shop-card > svg { width: 100%; height: auto; aspect-ratio: 160 / 96; border-radius: 10px; display: block; background: #cfe6f4; }
+.shop-card header { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
+.shop-card h3 { margin: 0; font-size: 1.15rem; }
+.shop-card .price { font-weight: 800; color: #ffd27a; font-variant-numeric: tabular-nums; }
+.shop-card p { margin: 0; font-size: 0.86rem; line-height: 1.25; opacity: 0.88; }
+.shop-card footer { display: flex; align-items: center; gap: 0.5rem; align-self: end; }
+.shop-card .kind { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; padding: 0.1rem 0.45rem; border-radius: 999px; background: #3f372d; opacity: 0.9; }
+.shop-card[data-kind="quick"] .kind { background: #1f4d36; }
+.shop-card[data-kind="gear"] .kind { background: #2d3e5c; }
+.shop-card .have { font-size: 0.8rem; color: #b6e3a8; flex: 1; }
+.shop-card footer button { min-height: 2.3rem; padding: 0 1rem; font-weight: 700; background: var(--fire); color: var(--fire-ink); }
+.shop-card footer button:disabled { background: #4a4238; color: #cfc6ba; }
+
+.shop-card > svg { grid-row: 1 / 4; align-self: center; }
+/* Phone width: picture on top. */
+@media (max-width: 30rem) {
+  .shop-card { grid-template-columns: 1fr; grid-template-rows: none; }
+  .shop-card > svg { grid-row: auto; }
+}
+
+/* The picture plays its effect when the card is hovered or focused. Static otherwise. */
+@media (prefers-reduced-motion: no-preference) {
+  .shop-card:is(:hover, :focus-within) .fx.boom { animation: fm-boom 0.9s ease-out infinite; }
+  .shop-card:is(:hover, :focus-within) .fx.drop { animation: fm-drop 1.2s ease-in infinite; }
+  .shop-card:is(:hover, :focus-within) .fx.roll { animation: fm-roll 1.4s ease-in infinite; }
+  .shop-card:is(:hover, :focus-within) .fx.tunnel { animation: fm-dash 0.8s linear infinite; }
+  .shop-card:is(:hover, :focus-within) .fx.pile { animation: fm-pile 1.2s ease-out infinite; }
+  .shop-card:is(:hover, :focus-within) .fx.glow { animation: fm-glow 1.6s ease-in-out infinite; }
+  .shop-card:is(:hover, :focus-within) .fx.mark { animation: fm-mark 1s ease-in-out infinite; }
+  .shop-card:is(:hover, :focus-within) .fx.heal { animation: fm-mark 1s ease-in-out infinite; }
+  .shop-card:is(:hover, :focus-within) .fx.cloud { animation: fm-drift 2s ease-in-out infinite alternate; }
+  .shop-card:is(:hover, :focus-within) .fx.debris { animation: fm-up 0.9s ease-out infinite; }
+  .shop-card:is(:hover, :focus-within) .fx.ping { animation: fm-ping 1s ease-in infinite; }
+  .shop-card:is(:hover, :focus-within) .fx.dig { animation: fm-dig 0.8s ease-in-out infinite alternate; }
+  .shop-card.bought { animation: fm-bought 0.5s ease-out; }
+}
+@keyframes fm-boom { from { scale: 0.3; opacity: 1; } to { scale: 1.15; opacity: 0.5; } }
+@keyframes fm-drop { from { translate: 0 -10px; opacity: 0.3; } to { translate: 0 0; opacity: 1; } }
+@keyframes fm-roll { from { translate: -18px -12px; } to { translate: 22px 12px; } }
+@keyframes fm-dash { to { stroke-dashoffset: -18; } }
+@keyframes fm-pile { from { scale: 1 0.2; } to { scale: 1 1; } }
+@keyframes fm-glow { 50% { opacity: 0.35; scale: 1.15; } }
+@keyframes fm-mark { 50% { scale: 1.15; } }
+@keyframes fm-drift { to { translate: 6px -2px; } }
+@keyframes fm-up { from { translate: 0 10px; opacity: 1; } to { translate: 0 -6px; opacity: 0; } }
+@keyframes fm-ping { from { translate: 0 0; } to { translate: 14px 10px; } }
+@keyframes fm-dig { to { rotate: 18deg; } }
+@keyframes fm-bought { 40% { border-color: #ffd27a; background: #4a3f24; } }

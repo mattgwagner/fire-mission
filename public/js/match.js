@@ -1,15 +1,16 @@
 import {
   AMMO,
   GEAR,
+  QUICK,
   PALETTE,
   WORLD_W,
   buildTerrain,
   deform,
-  fly,
   groundAt,
   mulberry32,
   observerCallout,
   placeGuns,
+  resolveFlight,
   settleGuns,
 } from "./sim.js";
 
@@ -20,11 +21,19 @@ const MAX_SHOTS = 36;
 const BLAST = {
   he: { radius: 44, damage: 55, crater: 24, depth: 18 },
   big: { radius: 62, damage: 85, crater: 40, depth: 28 },
-  cluster: { radius: 16, damage: 24, crater: 12, depth: 8 },
+  cluster: { radius: 30, damage: 32, crater: 14, depth: 9 },
+  burrower: { radius: 40, damage: 50, crater: 22, depth: 30 },
 };
+const REPAIR = 35;
+const BURY_REACH = 26;
+const SMOKE_R = 90;
 
 export function catalogItem(id) {
-  return AMMO.find((a) => a.id === id) || GEAR.find((g) => g.id === id) || null;
+  return [...AMMO, ...QUICK, ...GEAR].find((a) => a.id === id) || null;
+}
+
+function emptyInv() {
+  return Object.fromEntries([...AMMO, ...QUICK].filter((a) => a.price > 0).map((a) => [a.id, 0]));
 }
 
 function blankPlayer(raw, index) {
@@ -49,7 +58,7 @@ function blankPlayer(raw, index) {
     weapon: "he",
     cash: 80,
     score: 0,
-    inv: { big: 0, cluster: 0, smoke: 0, illum: 0, dirt: 0, digger: 0, guided: 0 },
+    inv: emptyInv(),
     armor: false,
     shovelNext: false,
     dugIn: false,
@@ -104,6 +113,10 @@ function freshRound(m) {
     p.bracket = { range: {}, lat: {} };
     p.lateral = 0;
     p.trail = null;
+    p.buried = false;
+    p.digImmune = false;
+    p.spotted = false;
+    p.repaired = false;
     p.lastCall = "";
     p.cpuShots = 0;
     if ((p.inv[p.weapon] || 0) <= 0 && p.weapon !== "he") p.weapon = "he";
@@ -122,7 +135,11 @@ function freshRound(m) {
   m.turnIndex = (m.roundNumber - 1) % m.players.length;
   m.turnCount = 0;
   m.lastFlight = null;
+  m.lastSubs = [];
+  m.lastBursts = [];
   m.lastImpact = null;
+  m.skipNote = "";
+  m.fx = [];
   m.pendingCallout = "";
   m.log = [];
   rollWind(m);
@@ -273,55 +290,96 @@ function checkRound(m) {
   }
 }
 
-function applyImpact(m, shooter, hit, weapon) {
+function boomAt(m, shooter, x, lateral, spec, directId, notes) {
+  deform(m.terrain, x, spec.crater, spec.depth);
+  notes.push(...blast(m, x, lateral, spec.radius, spec.damage, shooter, directId));
+  m.lastBursts.push({ x, y: groundAt(m.terrain, x), r: spec.radius });
+}
+
+function applyImpact(m, shooter, pending) {
+  const { hit, weapon } = pending;
   const notes = [];
+  m.lastBursts = [];
+  m.lastBuried = [];
   const impact = { x: hit.x, y: hit.y, lateral: hit.lateral || 0, off: hit.off, gunId: hit.gunId };
-  if (hit.off) {
+  const subs = (pending.subs || []).filter((b) => !b.off);
+  // A flare works wherever it comes down, even off the map.
+  if (weapon === "illum") shooter.spotted = true;
+  if (hit.off && !subs.length) {
     notes.push("Off the map");
     m.lastImpact = impact;
     return notes;
   }
-  if (weapon === "smoke") {
-    m.smokes.push({ x: hit.x, r: 110, by: shooter.id, until: m.turnCount + m.players.length });
-    for (const o of m.players) if (o !== shooter) o.blindWind = true;
-    notes.push("Smoke down");
+  let near;
+  if (weapon === "cluster" && subs.length) {
+    for (const b of subs) boomAt(m, shooter, b.x, b.lateral, BLAST.cluster, b.gunId, notes);
+    near = subs.map((b) => ({ x: b.x, reach: BLAST.cluster.crater + 30 }));
+    if (hit.off) Object.assign(impact, { x: subs[0].x, y: subs[0].y, off: false });
   } else if (weapon === "illum") {
     m.light = 4;
-    notes.push("The hill lights up");
+    notes.push(m.map === "night" ? "The hill lights up" : "Flare up: next shot shows its whole arc");
+    near = [];
   } else if (weapon === "dirt") {
-    deform(m.terrain, hit.x, 34, -24);
+    deform(m.terrain, hit.x, 40, -30);
     notes.push("Dirt piled up");
-  } else if (weapon === "digger") {
-    deform(m.terrain, hit.x, 16, 72);
-    notes.push("The ground drops");
-  } else if (weapon === "cluster") {
-    const spec = BLAST.cluster;
-    const spreads = [-36, -18, 0, 18, 36];
-    const lats = [-18, 10, 0, -8, 16];
-    spreads.forEach((dx, i) => {
-      const x = Math.max(0, Math.min(WORLD_W, hit.x + dx));
-      deform(m.terrain, x, spec.crater, spec.depth);
-      notes.push(...blast(m, x, (hit.lateral || 0) + lats[i], spec.radius, spec.damage, shooter, null));
-    });
+    for (const g of m.players) {
+      if (g.hp <= 0 || g.digImmune) continue;
+      if (Math.hypot(g.x - hit.x, (hit.lateral || 0)) > BURY_REACH) continue;
+      g.buried = true;
+      m.lastBuried.push(g.id);
+      const dealt = hurt(g, 8, shooter);
+      notes.push(`${g.name} is buried (${dealt})`);
+    }
+    near = [{ x: hit.x, reach: 40 + 30 }];
+  } else if (weapon === "burrower") {
+    boomAt(m, shooter, hit.x, hit.lateral, BLAST.burrower, hit.gunId, notes);
+    if (hit.gunId) notes.unshift("It came up underneath");
+    near = [{ x: hit.x, reach: BLAST.burrower.crater + 60 }];
   } else {
     const spec = BLAST[weapon] || BLAST.he;
-    deform(m.terrain, hit.x, spec.crater, spec.depth);
-    notes.push(...blast(m, hit.x, hit.lateral, spec.radius, spec.damage, shooter, hit.gunId));
+    boomAt(m, shooter, hit.x, hit.lateral, spec, hit.gunId, notes);
+    if (weapon === "roller" && hit.rolled > 20) notes.unshift(`Rolled ${Math.round(hit.rolled)} m`);
+    near = [{ x: hit.x, reach: spec.crater + 30 }];
   }
-  notes.push(...settleGuns(m.terrain, m.players, shooter, (target, amount, by) => hurt(target, amount, by), groundChange(hit, weapon)));
+  notes.push(...settleGuns(m.terrain, m.players, shooter, (target, amount, by) => hurt(target, amount, by), near));
   for (const p of m.players) p.y = groundAt(m.terrain, p.x);
   m.lastImpact = impact;
   return notes;
 }
 
-// Where the ground moved: the crater plus a margin for the dirt that slumps off its lips.
-function groundChange(hit, weapon) {
-  const margin = 30;
-  if (weapon === "smoke" || weapon === "illum") return [];
-  if (weapon === "dirt") return [{ x: hit.x, reach: 34 + margin }];
-  if (weapon === "digger") return [{ x: hit.x, reach: 16 + margin * 2 }];
-  if (weapon === "cluster") return [{ x: hit.x, reach: 36 + BLAST.cluster.crater + margin }];
-  return [{ x: hit.x, reach: (BLAST[weapon] || BLAST.he).crater + margin }];
+// Quick items: used while aiming, and the turn goes on. Each one leaves a note in
+// m.fx so the screen can show it (a CPU uses them inside chooseShot).
+export function useRepair(m) {
+  const p = currentPlayer(m);
+  if (m.phase !== "aim" || !p) return { ok: false, reason: "Not your turn" };
+  if ((p.inv.repair || 0) <= 0) return { ok: false, reason: "No repair kits" };
+  if (p.repaired) return { ok: false, reason: "One repair per turn" };
+  if (p.hp >= 100) return { ok: false, reason: "Already at full health" };
+  const amount = Math.min(REPAIR, 100 - p.hp);
+  p.hp += amount;
+  p.inv.repair--;
+  p.repaired = true;
+  m.fx.push({ kind: "heal", id: p.id, x: p.x, y: p.y, amount });
+  m.log.unshift(`${p.name} patches up +${amount}`);
+  return { ok: true, amount };
+}
+
+export function popSmoke(m) {
+  const p = currentPlayer(m);
+  if (m.phase !== "aim" || !p) return { ok: false, reason: "Not your turn" };
+  if ((p.inv.smoke || 0) <= 0) return { ok: false, reason: "No smoke" };
+  if (m.smokes.some((s) => s.by === p.id)) return { ok: false, reason: "Already in smoke" };
+  p.inv.smoke--;
+  // Two full trips around the table, so everyone shoots at it twice.
+  m.smokes.push({ x: p.x, r: SMOKE_R, by: p.id, until: m.turnCount + m.players.length * 2 });
+  for (const o of m.players) if (o !== p) o.blindWind = true;
+  m.fx.push({ kind: "smoke", id: p.id, x: p.x, y: p.y });
+  m.log.unshift(`${p.name} pops smoke`);
+  return { ok: true };
+}
+
+export function inSmoke(m, viewerId, x) {
+  return m.smokes.some((s) => s.by !== viewerId && Math.abs(s.x - x) < s.r * 0.8);
 }
 
 export function fire(m) {
@@ -339,9 +397,14 @@ export function fire(m) {
   m.shooterIndex = currentIndex(m);
   if (weapon === "guided" && enemy && !Number.isFinite(p.markX)) p.markX = enemy.x;
   const shot = shotFrom(m, p);
-  const hit = fly(m.terrain, m.players, shot, p.blindWind ? 0 : m.wind);
-  m.lastFlight = hit.path;
-  m.pending = { hit, weapon, shooterId: p.id, enemyId: enemy ? enemy.id : null };
+  const flight = resolveFlight(m.terrain, m.players, shot, p.blindWind ? 0 : m.wind, weapon);
+  m.lastFlight = flight.path;
+  m.lastSubs = flight.subs.map((b) => b.path);
+  m.pending = { hit: flight.hit, subs: flight.subs, weapon, shooterId: p.id, enemyId: enemy ? enemy.id : null };
+  p.spotted = false;
+  p.repaired = false;
+  p.digImmune = false;
+  m.skipNote = "";
   m.phase = "flying";
   return { ok: true };
 }
@@ -351,12 +414,13 @@ export function commitFlight(m) {
   const p = m.players.find((g) => g.id === m.pending.shooterId);
   const enemy = m.players.find((g) => g.id === m.pending.enemyId) || null;
   const before = m.players.map((g) => g.hp);
-  const notes = applyImpact(m, p, m.pending.hit, m.pending.weapon);
+  const notes = applyImpact(m, p, m.pending);
   m.lastHits = m.players
     .map((g, i) => ({ id: g.id, x: g.x, y: g.y, dealt: before[i] - g.hp, killed: before[i] > 0 && g.hp <= 0 }))
     .filter((hh) => hh.dealt > 0);
   m.lastWeapon = m.pending.weapon;
-  p.trail = m.pending.hit.path;
+  const center = m.pending.subs?.[2];
+  if (m.lastFlight?.length) p.trail = center ? m.lastFlight.concat(center.path) : m.lastFlight;
   m.pending = null;
   m.shotsThisRound++;
   m.totalShots++;
@@ -408,10 +472,23 @@ export function handoff(m) {
     if (m.players[next].hp > 0) break;
     next = (next + 1) % n;
   }
+  // A buried gun spends its turn digging out, then can't be buried again until it fires.
+  const skipped = [];
+  for (let k = 0; k < n * 2 && m.players[next].buried; k++) {
+    const g = m.players[next];
+    g.buried = false;
+    g.digImmune = true;
+    skipped.push(g.name);
+    next = (next + 1) % n;
+    for (let j = 0; j < n && m.players[next].hp <= 0; j++) next = (next + 1) % n;
+  }
+  m.skipNote = skipped.length ? `${skipped.join(" and ")} ${skipped.length > 1 ? "dig" : "digs"} out and ${skipped.length > 1 ? "lose a turn" : "loses a turn"}` : "";
+  if (m.skipNote) m.log.unshift(m.skipNote);
   m.turnIndex = next;
   m.pendingCallout = "";
   driftWind(m);
   m.lastFlight = null;
+  m.lastSubs = [];
   m.lastHits = [];
   m.phase = "aim";
 }

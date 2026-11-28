@@ -3,6 +3,7 @@ export const WORLD_W = 1000;
 export const BEDROCK = 36;
 export const VIEW_H = 520;
 const DT = 0.05;
+const GUIDE_ACCEL = 3.2;
 const G = 9.8;
 
 export const PALETTE = [
@@ -26,20 +27,27 @@ export const MAPS = [
   { id: "random", name: "Random" },
 ];
 
+// Rounds are fired. Quick items are used while aiming and don't end the turn.
+// Gear is bought for the round or the match. `hint` must fit three short lines on a shop card.
 export const AMMO = [
-  { id: "he", name: "HE", price: 0, hint: "Standard shell" },
-  { id: "big", name: "Big HE", price: 160, hint: "Wider crater, harder hit" },
-  { id: "cluster", name: "Cluster", price: 180, hint: "Scatters bomblets" },
-  { id: "smoke", name: "Smoke", price: 80, hint: "Hides the hill and the wind for a turn" },
-  { id: "illum", name: "Illumination", price: 70, hint: "Lights a night map" },
-  { id: "dirt", name: "Dirt Mover", price: 90, hint: "Piles up cover" },
-  { id: "digger", name: "Digger", price: 100, hint: "Opens a pit" },
-  { id: "guided", name: "Guided", price: 280, hint: "Steers toward your mark" },
+  { id: "he", name: "HE", price: 0, hint: "The standard shell. Always free, never runs out." },
+  { id: "big", name: "Heavy", price: 150, hint: "Huge blast and a deep crater. A direct hit takes 85." },
+  { id: "cluster", name: "Cluster", price: 140, hint: "Pops open at the top of its arc and rains five bomblets across the target." },
+  { id: "roller", name: "Roller", price: 110, hint: "Lands, then rolls downhill until it bumps a gun or runs out of speed." },
+  { id: "burrower", name: "Burrower", price: 140, hint: "Landed short? It tunnels on up to 60 m and blows up under whoever it reaches." },
+  { id: "dirt", name: "Dirt Bomb", price: 90, hint: "Dumps a hill of dirt. A buried gun loses its next turn digging out." },
+  { id: "illum", name: "Flare", price: 70, hint: "Lights up a night map and shows your whole arc on your next shot." },
+  { id: "guided", name: "Guided", price: 220, hint: "Steers itself onto the mark you set. Fixes a miss of up to about 100 m." },
+];
+
+export const QUICK = [
+  { id: "repair", name: "Repair Kit", price: 100, hint: "Patch up 35 health, then still take your shot. One per turn." },
+  { id: "smoke", name: "Smoke", price: 70, hint: "Pop a cloud around your gun. Enemies can't see you or where their shells land." },
 ];
 
 export const GEAR = [
-  { id: "armor", name: "Armor", price: 200, hint: "40% less damage for the match" },
-  { id: "shovel", name: "Shovel", price: 60, hint: "Dig in: 25% less damage for one round" },
+  { id: "armor", name: "Armor", price: 200, hint: "Takes 40% less damage for the rest of the match." },
+  { id: "shovel", name: "Shovel", price: 60, hint: "Dig in before the next round: 25% less damage that round." },
 ];
 
 export function mulberry32(seed) {
@@ -145,28 +153,35 @@ export function velocity(shot) {
 
 // terrain null flies over flat ground at y = 0, including past the map, for the range card.
 export function fly(terrain, players, shot, wind) {
-  const { vx: vx0, vy: vy0, speed } = velocity(shot);
-  let vx = vx0;
-  let vy = vy0;
-  let x = shot.x;
-  let y = shot.y + 6;
+  const v = shot.v0 || velocity(shot);
+  let vx = v.vx;
+  let vy = v.vy;
+  const sx = shot.start ? shot.start.x : shot.x;
+  const sy = shot.start ? shot.start.y : shot.y + 6;
+  let x = sx;
+  let y = sy;
   const path = [];
   const trace = shot.trace !== false;
   const lateral = shot.mode === "observer" ? shot.lateral || 0 : 0;
   const guided = shot.weapon === "guided" && Number.isFinite(shot.markX);
   for (let i = 0; i < 6000; i++) {
-    if (guided && i > 8) {
-      const dx = shot.markX - x;
-      vx += Math.max(-40, Math.min(40, dx)) * 0.025;
-      const sp = Math.hypot(vx, vy) || 1;
-      const cap = speed * 1.25;
-      if (sp > cap) {
-        vx *= cap / sp;
-        vy *= cap / sp;
-      }
+    if (guided && terrain && i > 8) {
+      // Steer for where it will be when it comes down over the mark. Limited authority:
+      // it fixes a miss of about 100 m, not a shot fired the wrong way.
+      const gy = terrain[clampIndex(shot.markX)];
+      const drop = Math.max(0, y - gy);
+      const tGo = Math.max(0.6, (vy + Math.sqrt(Math.max(0, vy * vy + 2 * G * drop))) / G);
+      const want = (shot.markX - x) / tGo;
+      const turn = GUIDE_ACCEL * DT;
+      vx += Math.max(-turn, Math.min(turn, want - vx));
     }
     vx += (wind || 0) * 0.1 * DT;
+    const rising = vy > 0;
     vy -= G * DT;
+    if (shot.apex && rising && vy <= 0 && i > 8) {
+      path.push({ x, y });
+      return { path, x, y, vx, vy, lateral, off: false, gunId: null, apex: true };
+    }
     x += vx * DT;
     y += vy * DT;
     if (!Number.isFinite(x) || !Number.isFinite(y)) {
@@ -177,22 +192,98 @@ export function fly(terrain, players, shot, wind) {
     if (terrain && (x < -20 || x > WORLD_W + 20)) return { path, x, y, lateral, off: true, gunId: null };
     if (!terrain && y <= 0) return { path, x, y: 0, lateral, off: false, gunId: null };
     if (terrain && i > 6) {
-      const fromMuzzle = Math.hypot(x - shot.x, y - (shot.y + 6));
+      const fromMuzzle = Math.hypot(x - sx, y - sy);
       if (fromMuzzle > 16 && players) {
         for (const g of players) {
           if (g.hp <= 0) continue;
           // The gun body sits on the ground, so the hit circle is centered a few meters up.
           if (Math.hypot(x - g.x, y - (g.y + 6)) < 12) {
-            return { path, x: g.x, y: g.y, lateral, off: false, gunId: g.id };
+            return { path, x: g.x, y: g.y, vx, lateral, off: false, gunId: g.id };
           }
         }
       }
       if (y <= terrain[clampIndex(x)]) {
-        return { path, x, y: terrain[clampIndex(x)], lateral, off: false, gunId: null };
+        return { path, x, y: terrain[clampIndex(x)], vx, lateral, off: false, gunId: null };
       }
     }
   }
   return { path, x, y, lateral, off: true, gunId: null };
+}
+
+// Bomblets leave the apex with these extra side speeds (m/s), so the spread grows with the drop.
+export const CLUSTER_SPREAD = [-14, -7, 0, 7, 14];
+const CLUSTER_LATERAL = [-18, 10, 0, -8, 16];
+const ROLL_MAX = 260;
+export const BURROW_MAX = 60;
+
+function gunNear(players, x, reach) {
+  return players ? players.find((g) => g.hp > 0 && Math.abs(g.x - x) < reach) : null;
+}
+
+// A roller keeps the speed it landed with, gains it going downhill and loses it to friction and climbing.
+function roll(terrain, players, hit) {
+  let x = clampIndex(hit.x);
+  const fall = terrain[Math.max(0, x - 4)] - terrain[Math.min(WORLD_W, x + 4)];
+  let dir = Math.abs(fall) > 1 ? Math.sign(fall) : Math.sign(hit.vx || 1);
+  let v2 = 100;
+  const path = [];
+  for (let d = 0; d < ROLL_MAX; d++) {
+    const nx = x + dir;
+    if (nx < 2 || nx > WORLD_W - 2) break;
+    const g = gunNear(players, nx, 9);
+    if (g) return { path, x: g.x, y: g.y, gunId: g.id, dist: d };
+    v2 += 2 * G * 0.7 * (terrain[x] - terrain[nx]) - 2.4;
+    if (v2 <= 0) break;
+    x = nx;
+    if (d % 4 === 0) path.push({ x, y: terrain[x] + 1.5 });
+  }
+  return { path, x, y: terrain[x], gunId: null, dist: Math.abs(x - hit.x) };
+}
+
+function burrow(terrain, players, hit) {
+  const dir = Math.sign(hit.vx || 1);
+  let x = clampIndex(hit.x);
+  const path = [];
+  for (let d = 0; d < BURROW_MAX; d += 2) {
+    const nx = clampIndex(hit.x + dir * d);
+    if (nx <= 2 || nx >= WORLD_W - 2) break;
+    x = nx;
+    path.push({ x, y: terrain[x] - 7, under: true });
+    const g = gunNear(players, x, 8);
+    if (g) return { path, x: g.x, y: terrain[clampIndex(g.x)], gunId: g.id };
+  }
+  return { path, x, y: terrain[x], gunId: null };
+}
+
+// The whole flight of one round, physics only: where it goes and where it bursts.
+// `hit` is the main burst (the one the observer calls), `subs` are cluster bomblets.
+export function resolveFlight(terrain, players, shot, wind, weapon) {
+  if (weapon === "cluster") {
+    const top = fly(terrain, players, { ...shot, apex: true }, wind);
+    if (!top.apex) return { path: top.path, hit: top, subs: [] };
+    const subs = CLUSTER_SPREAD.map((dv, i) => {
+      const b = fly(terrain, players, {
+        ...shot,
+        weapon: "he",
+        apex: false,
+        start: { x: top.x, y: top.y },
+        v0: { vx: top.vx + dv, vy: top.vy },
+      }, wind);
+      return shot.mode === "observer" ? { ...b, lateral: (shot.lateral || 0) + CLUSTER_LATERAL[i] } : b;
+    });
+    return { path: top.path, hit: subs[2], subs };
+  }
+  const hit = fly(terrain, players, shot, wind);
+  if (hit.off || hit.gunId || !terrain) return { path: hit.path, hit, subs: [] };
+  if (weapon === "roller") {
+    const r = roll(terrain, players, hit);
+    return { path: hit.path.concat(r.path), hit: { ...hit, x: r.x, y: r.y, gunId: r.gunId, rolled: r.dist }, subs: [] };
+  }
+  if (weapon === "burrower") {
+    const b = burrow(terrain, players, hit);
+    return { path: hit.path.concat(b.path), hit: { ...hit, x: b.x, y: b.y, gunId: b.gunId, burrowed: true }, subs: [] };
+  }
+  return { path: hit.path, hit, subs: [] };
 }
 
 let rangeCardCache = null;
